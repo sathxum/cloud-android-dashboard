@@ -1,6 +1,12 @@
 name: Cloud Android Gateway
 
 on:
+  workflow_call:
+    inputs:
+      admin_user: { description: "Dashboard admin username", type: string, required: true }
+      admin_pass: { description: "Dashboard admin password", type: string, required: true }
+      tunnel: { description: "Dashboard tunnel: cloudflare | ngrok", type: string, required: true, default: "cloudflare" }
+      ngrok_token: { description: "Ngrok auth token (if tunnel=ngrok)", type: string, required: false, default: "" }
   workflow_dispatch:
     inputs:
       admin_user:
@@ -27,10 +33,10 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 350
     env:
-      ADMIN_USER: ${{ github.event.inputs.admin_user }}
-      ADMIN_PASS: ${{ github.event.inputs.admin_pass }}
-      TUNNEL: ${{ github.event.inputs.tunnel }}
-      NGROK_TOKEN: ${{ github.event.inputs.ngrok_token }}
+      ADMIN_USER: ${{ inputs.admin_user || github.event.inputs.admin_user }}
+      ADMIN_PASS: ${{ inputs.admin_pass || github.event.inputs.admin_pass }}
+      TUNNEL: ${{ inputs.tunnel || github.event.inputs.tunnel }}
+      NGROK_TOKEN: ${{ inputs.ngrok_token || github.event.inputs.ngrok_token }}
       PORT: "8080"
     steps:
       - name: Checkout project

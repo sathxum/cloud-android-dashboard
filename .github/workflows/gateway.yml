@@ -42,6 +42,7 @@ jobs:
 
       - name: Install ws-scrcpy + tunnel
         run: |
+          set -x
           brew install scrcpy || true
           npm i -g ws-scrcpy@0.8.5 || npm i -g ws-scrcpy || true
           if [ "$TUNNEL" = "ngrok" ]; then
@@ -50,33 +51,67 @@ jobs:
           else
             brew install cloudflared || true
           fi
+          node --version; which cloudflared || true; which ngrok || true
 
-      - name: Start gateway server
+      - name: Boot gateway + tunnel (robust)
         run: |
-          chmod +x .github/scripts/boot-device.sh
-          nohup node server.js > gateway.log 2>&1 &
-          sleep 4
-          echo "[gateway] started on :$PORT"
+          set -e
+          chmod +x .github/scripts/boot-device.sh || true
 
-      - name: Open tunnel for the dashboard
-        run: |
+          # --- start gateway with crash auto-restart ---
+          start_gateway() { nohup node server.js > gateway.log 2>&1 & echo $! > gateway.pid; }
+          start_gateway
+          echo "[gateway] pid=$(cat gateway.pid)"
+
+          # --- wait until the server actually answers on :$PORT (up to 60s) ---
+          ok=0
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/" || echo 000)
+            # 401 (auth required) means the server is up and healthy
+            if [ "$code" = "401" ] || [ "$code" = "200" ]; then ok=1; echo "[gateway] healthy (HTTP $code) after ${i}x2s"; break; fi
+            # restart if the process died
+            if ! kill -0 "$(cat gateway.pid)" 2>/dev/null; then echo "[gateway] crashed, restarting..."; cat gateway.log; start_gateway; fi
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then echo "::error::gateway did not become healthy"; cat gateway.log; exit 1; fi
+
+          # --- open the tunnel ---
           if [ "$TUNNEL" = "ngrok" ]; then
-            nohup ngrok http 8080 --log=stdout > ngrok.log 2>&1 &
-            sleep 8
-            URL=$(curl -s http://localhost:4040/api/tunnels | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{console.log(JSON.parse(d).tunnels[0].public_url)}catch(e){console.log('')}})")
+            nohup ngrok http $PORT --log=stdout > ngrok.log 2>&1 &
+            for i in $(seq 1 20); do
+              URL=$(curl -s http://localhost:4040/api/tunnels | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{console.log(JSON.parse(d).tunnels[0].public_url)}catch(e){console.log('')}})")
+              [ -n "$URL" ] && break; sleep 2
+            done
           else
-            nohup cloudflared tunnel --url http://localhost:8080 --no-autoupdate > cf.log 2>&1 &
-            sleep 12
-            URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' cf.log | head -1)
+            nohup cloudflared tunnel --url "http://127.0.0.1:$PORT" --no-autoupdate > cf.log 2>&1 &
+            for i in $(seq 1 30); do
+              URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' cf.log | head -1)
+              [ -n "$URL" ] && break; sleep 2
+            done
           fi
+
+          if [ -z "$URL" ]; then echo "::error::tunnel URL not found"; cat cf.log ngrok.log 2>/dev/null; exit 1; fi
+
+          # --- verify the tunnel reaches the gateway (expects 401) ---
+          for i in $(seq 1 15); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$URL/" || echo 000)
+            if [ "$code" = "401" ] || [ "$code" = "200" ]; then echo "[tunnel] reachable (HTTP $code)"; break; fi
+            sleep 3
+          done
+
           echo "=================================================="
-          echo "  DASHBOARD URL : $URL"
-          echo "  ADMIN USER    : $ADMIN_USER"
-          echo "  Devices open at: $URL/<devicename>"
+          echo "  ✅ DASHBOARD URL : $URL"
+          echo "  👤 ADMIN USER    : $ADMIN_USER"
+          echo "  📱 Devices open at: $URL/<devicename>"
           echo "=================================================="
           echo "DASHBOARD_URL=$URL" >> "$GITHUB_ENV"
 
-      - name: Keep alive
+      - name: Keep alive (with health watchdog)
         run: |
           echo "Dashboard live at: $DASHBOARD_URL"
-          for i in $(seq 1 340); do sleep 60; done
+          for i in $(seq 1 340); do
+            sleep 60
+            if ! kill -0 "$(cat gateway.pid 2>/dev/null)" 2>/dev/null; then
+              echo "[watchdog] gateway died — restarting"; nohup node server.js > gateway.log 2>&1 & echo $! > gateway.pid
+            fi
+          done

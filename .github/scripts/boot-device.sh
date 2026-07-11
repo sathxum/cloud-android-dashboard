@@ -23,12 +23,15 @@ ARCH="$(uname -m)"
 if [ "$ARCH" = "arm64" ]; then ABI="arm64-v8a"; else ABI="x86_64"; fi
 PKG="system-images;android-${API};google_apis;${ABI}"
 echo "[boot] host arch=$ARCH -> ABI=$ABI"
+echo "PHASE downloading image"
 yes | sdkmanager "$PKG" "platform-tools" "emulator" >/dev/null 2>&1 || true
 
 # create AVD (idempotent)
+echo "PHASE creating AVD"
 echo "no" | avdmanager create avd -n "$AVD" -k "$PKG" -d "$PROFILE" --force >/dev/null 2>&1 || true
 
 # boot headless with requested resources
+echo "PHASE booting emulator"
 emulator -avd "$AVD" -no-window -no-audio -no-boot-anim -no-snapshot \
   -gpu swiftshader_indirect -memory "$RAM" -cores "$CORES" -partition-size "$STORAGE" \
   -port $((5554 + (PORT % 100) * 2)) >/tmp/emu_${NAME}.log 2>&1 &
@@ -44,6 +47,7 @@ echo "[boot] RAM=${RRAM}MB cores=${RCORES}"
 
 # start ws-scrcpy on the device port
 export WS_SCRCPY_PORT="$PORT"
+echo "PHASE starting screen mirror"
 ws-scrcpy --port "$PORT" >/tmp/ws_${NAME}.log 2>&1 &
 sleep 6
 echo "WS_SCRCPY_READY $NAME $PORT"

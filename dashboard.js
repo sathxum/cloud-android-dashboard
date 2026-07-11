@@ -1,162 +1,275 @@
-/* Cloud Android dashboard UI — talks to the gateway server API.
- * The dashboard itself is already behind admin Basic-Auth (served by the gateway),
- * so API calls just use same-origin credentials.
+/* Cloud Android — Control Center UI.
+ * Talks to the gateway server (same origin, behind admin Basic-Auth).
+ * Features: live device grid, animated boot phases, live per-device log stream,
+ * real runner specs, session countdown, create/restart/stop, toasts.
  */
 const $ = (s, r = document) => r.querySelector(s);
-const app = document.getElementById("app");
-let devices = [];
-let specs = {};
-
-async function api(path, opts = {}) {
+const app = $("#app");
+const api = async (path, opts = {}) => {
   const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
-  return res.json();
+  return res.status === 204 ? {} : res.json();
+};
+
+// ---------- toasts ----------
+function toast(msg, kind = "info") {
+  const c = { info: "border-brand-blue text-brand-blue", success: "border-brand-green text-brand-green", error: "border-brand-red text-brand-red", warn: "border-brand-orange text-brand-orange" }[kind];
+  const el = document.createElement("div");
+  el.className = `glass ${c} border-l-2 rounded-lg px-4 py-2.5 text-sm shadow-xl animate-slideUp max-w-xs`;
+  el.innerHTML = `<i class="fa-solid ${kind === "success" ? "fa-check" : kind === "error" ? "fa-triangle-exclamation" : "fa-circle-info"} mr-2"></i>${msg}`;
+  $("#toasts").appendChild(el);
+  setTimeout(() => { el.style.transition = ".3s"; el.style.opacity = "0"; setTimeout(() => el.remove(), 300); }, 3800);
 }
 
-function fld(id, label, type, val, ph) {
-  return `<label class="block"><span class="text-xs font-mono text-white/60">${label}</span>
-    <input id="${id}" type="${type}" value="${val ?? ""}" placeholder="${ph || ""}"
-      class="fld w-full mt-1 rounded-lg px-3 py-2.5 text-sm font-mono" autocapitalize="off" autocomplete="off" spellcheck="false"/></label>`;
+// ---------- state ----------
+let specs = null, devices = [], openLogs = null, pollTimer = null;
+const SESSION_MAX = 6 * 3600 * 1000; // ~6h GitHub limit
+let sessionStart = Date.now();
+
+const PHASES = ["downloading image", "creating AVD", "booting emulator", "starting screen mirror"];
+function phasePct(d) {
+  if (d.status === "online") return 100;
+  const i = PHASES.indexOf(d.phase);
+  return i < 0 ? 6 : Math.min(95, 15 + i * 22);
 }
-function sel(id, label, opts, def) {
-  return `<label class="block"><span class="text-xs font-mono text-white/60">${label}</span>
-    <select id="${id}" class="fld w-full mt-1 rounded-lg px-3 py-2.5 text-sm font-mono">
-      ${opts.map((o) => `<option ${o === def ? "selected" : ""}>${o}</option>`).join("")}</select></label>`;
+function fmtDur(ms) {
+  if (!ms || ms < 0) return "0s";
+  const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+  return h ? `${h}h ${m}m` : m ? `${m}m ${ss}s` : `${ss}s`;
 }
 
-async function render() {
-  try { specs = await api("/api/specs"); } catch {}
-  try { devices = (await api("/api/devices")).devices || []; } catch {}
+// ---------- shell ----------
+function shell() {
   app.innerHTML = `
-    <header class="flex items-center justify-between mb-5 mt-1">
-      <div>
-        <h1 class="text-2xl font-extrabold"><span class="text-neon-green">CLOUD</span> ANDROID</h1>
-        <p class="text-white/40 text-xs font-mono">gateway dashboard</p>
-      </div>
-      <button id="refresh" class="chip px-3 py-2 rounded-lg text-xs font-mono text-neon-blue"><i class="fa-solid fa-rotate"></i></button>
-    </header>
-
-    <div class="grid sm:grid-cols-3 gap-3 mb-5">
-      ${specCard("fa-microchip","RUNNER OS", (specs.os||"—"), "GitHub-hosted")}
-      ${specCard("fa-memory","HOST RAM", (specs.ram_mb? specs.ram_mb+" MB":"—"), (specs.cores||"—")+" cores")}
-      ${specCard("fa-hard-drive","DISK FREE", (specs.disk_free_mb? Math.round(specs.disk_free_mb/1024)+" GB":"—"), "on runner")}
-    </div>
-
-    <div class="flex gap-2 mb-4">
-      <button id="tDev" class="tab-active neon-border px-4 py-2 rounded-lg text-sm font-mono flex-1">Devices</button>
-      <button id="tNew" class="glass px-4 py-2 rounded-lg text-sm font-mono flex-1 text-white/60">+ Create</button>
-    </div>
-    <div id="panel"></div>`;
-
-  $("#refresh").onclick = render;
-  $("#tDev").onclick = showDevices;
-  $("#tNew").onclick = showCreate;
-  showDevices();
-}
-
-function specCard(icon, label, big, sub) {
-  return `<div class="glass rounded-xl p-4">
-    <div class="flex items-center gap-2 text-white/50 text-xs font-mono"><i class="fa-solid ${icon} text-neon-green"></i> ${label}</div>
-    <div class="text-lg font-bold mt-1">${big}</div><div class="text-white/40 text-[11px] font-mono">${sub}</div></div>`;
-}
-function setTab(t) {
-  $("#tDev").className = "px-4 py-2 rounded-lg text-sm font-mono flex-1 " + (t === "dev" ? "tab-active neon-border" : "glass text-white/60");
-  $("#tNew").className = "px-4 py-2 rounded-lg text-sm font-mono flex-1 " + (t === "new" ? "tab-active neon-border" : "glass text-white/60");
-}
-
-function showDevices() {
-  setTab("dev");
-  const panel = $("#panel");
-  if (!devices.length) {
-    panel.innerHTML = `<div class="glass rounded-xl p-8 text-center text-white/40">
-      <i class="fa-solid fa-mobile-screen text-3xl mb-3 text-white/20"></i>
-      <p class="font-mono text-sm">No devices yet. Create one.</p></div>`;
-    return;
-  }
-  panel.innerHTML = devices.map(card).join("");
-  devices.forEach((d) => {
-    const o = document.getElementById("open-" + d.name); if (o) o.onclick = () => window.open("/" + d.name + "/", "_blank");
-    const x = document.getElementById("del-" + d.name); if (x) x.onclick = () => delDevice(d.name);
-  });
-}
-
-function card(d) {
-  const online = d.status === "online";
-  return `<div class="glass rounded-xl p-4 mb-3">
-    <div class="flex items-center justify-between">
+    <header class="flex flex-wrap items-center justify-between gap-3 mb-6">
       <div class="flex items-center gap-3">
-        <div class="w-10 h-10 rounded-lg grid place-items-center ${online ? "bg-neon-green/15 text-neon-green" : "bg-white/5 text-white/30"}"><i class="fa-brands fa-android"></i></div>
+        <div class="w-11 h-11 rounded-xl grid place-items-center bg-gradient-to-br from-brand-green to-brand-blue text-black text-xl"><i class="fa-brands fa-android"></i></div>
         <div>
-          <div class="font-bold">${d.name}</div>
-          <div class="text-xs font-mono ${online ? "text-neon-green" : "text-white/40"}"><i class="fa-solid fa-circle text-[7px]"></i> ${d.status}</div>
+          <h1 class="text-xl font-extrabold leading-tight">Cloud Android <span class="text-brand-green">Control Center</span></h1>
+          <p class="text-white/40 text-xs font-mono" id="sessionLine">session starting…</p>
         </div>
       </div>
-      <div class="flex gap-2">
-        <button id="del-${d.name}" class="glass px-3 py-2 rounded-lg text-xs text-white/50"><i class="fa-solid fa-trash"></i></button>
-        <button id="open-${d.name}" ${online ? "" : "disabled"} class="btn-primary px-4 py-2 rounded-lg text-xs ${online ? "" : "opacity-40"}"><i class="fa-solid fa-up-right-from-square"></i> Open</button>
+      <div class="flex items-center gap-2">
+        <button id="newBtn" class="btn btn-primary px-4 py-2.5 rounded-xl text-sm"><i class="fa-solid fa-plus mr-2"></i>New device</button>
+        <button id="logoutBtn" class="btn btn-ghost px-3 py-2.5 rounded-xl text-sm text-white/70"><i class="fa-solid fa-power-off"></i></button>
       </div>
+    </header>
+
+    <section id="specs" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6"></section>
+
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-bold text-lg flex items-center gap-2"><i class="fa-solid fa-mobile-screen-button text-brand-green"></i> Devices <span id="devCount" class="text-white/40 text-sm font-mono"></span></h2>
+      <button id="refreshBtn" class="btn btn-ghost px-3 py-1.5 rounded-lg text-xs font-mono text-white/60"><i class="fa-solid fa-rotate mr-1"></i>refresh</button>
     </div>
-    <div class="mt-2 grid grid-cols-4 gap-2 text-[11px] font-mono text-white/50">
-      <div>RAM<br><b class="text-white/80">${d.ram}M</b></div>
-      <div>Storage<br><b class="text-white/80">${d.storage}M</b></div>
-      <div>Cores<br><b class="text-white/80">${d.cores}</b></div>
-      <div>API<br><b class="text-white/80">${d.api}</b></div>
-    </div>
-    <div class="mt-2 text-[11px] font-mono text-white/40">access: <b class="text-neon-blue">/${d.name}</b> · user: ${d.user} · pass: ${d.pass}</div>
+    <section id="grid" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4"></section>`;
+
+  $("#newBtn").onclick = openCreate;
+  $("#refreshBtn").onclick = () => poll(true);
+  $("#logoutBtn").onclick = () => { document.cookie = ""; location.reload(); };
+  renderSpecs();
+  renderGrid();
+}
+
+// ---------- specs cards ----------
+function specCard(icon, label, val, sub, color = "text-brand-green") {
+  return `<div class="glass rounded-xl p-4">
+    <div class="flex items-center gap-2 text-white/45 text-[11px] font-mono uppercase tracking-wide"><i class="fa-solid ${icon} ${color}"></i> ${label}</div>
+    <div class="text-lg font-bold mt-1 truncate">${val}</div>
+    <div class="text-white/35 text-[11px] font-mono">${sub}</div>
   </div>`;
 }
+function renderSpecs() {
+  const el = $("#specs"); if (!el) return;
+  if (!specs) { el.innerHTML = Array(4).fill(`<div class="glass rounded-xl p-4 h-[86px] skeleton animate-shimmer"></div>`).join(""); return; }
+  const online = devices.filter(d => d.status === "online").length;
+  el.innerHTML = [
+    specCard("fa-microchip", "Runner", (specs.os || "macos").toUpperCase(), `${specs.cores} vCPU · Apple Silicon`),
+    specCard("fa-memory", "Runner RAM", `${(specs.ram_mb / 1024).toFixed(0)} GB`, "shared host pool", "text-brand-blue"),
+    specCard("fa-hard-drive", "Free disk", `${(specs.disk_free_mb / 1024).toFixed(0)} GB`, "for AVDs & images", "text-brand-purple"),
+    specCard("fa-signal", "Devices online", `${online}/${devices.length || 0}`, "live now", online ? "text-brand-green" : "text-white/40"),
+  ].join("");
+}
 
-function showCreate() {
-  setTab("new");
-  $("#panel").innerHTML = `
-    <div class="glass rounded-xl p-5">
-      <div class="grid sm:grid-cols-2 gap-4">
-        ${fld("c_name","Device name (URL slug)","text","","pixel-1")}
-        ${sel("c_profile","Hardware profile",["pixel_6","pixel_4","pixel_xl","Nexus 6"],"pixel_6")}
-        ${sel("c_api","Android version",["30","31","33","34"],"31")}
-        ${fld("c_cores","CPU cores","number","4")}
-        ${fld("c_ram","RAM (MB)","number","4096")}
-        ${fld("c_storage","Storage (MB)","number","10240")}
-        ${fld("c_user","Device username","text","","user")}
-        ${fld("c_pass","Device password","text","","")}
+// ---------- device grid ----------
+function statusPill(d) {
+  const map = {
+    online: ["text-brand-green", "bg-brand-green/15", "online"],
+    pending: ["text-brand-orange", "bg-brand-orange/15", d.phase || "booting"],
+    offline: ["text-white/40", "bg-white/5", "offline"],
+    error: ["text-brand-red", "bg-brand-red/15", "error"],
+  };
+  const [tc, bg, label] = map[d.status] || map.pending;
+  return `<span class="inline-flex items-center gap-1.5 ${tc} ${bg} px-2 py-0.5 rounded-full text-[11px] font-mono">
+    <span class="w-1.5 h-1.5 rounded-full bg-current ${d.status === "pending" ? "animate-pulseDot" : ""}"></span>${label}</span>`;
+}
+function deviceCard(d) {
+  const online = d.status === "online";
+  const pct = phasePct(d);
+  return `<div class="glass glass-hover rounded-2xl p-4 transition animate-slideUp" data-dev="${d.name}">
+    <div class="flex items-start justify-between gap-2">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="w-11 h-11 rounded-xl grid place-items-center ${online ? "bg-brand-green/15 text-brand-green" : "bg-white/5 text-white/40"} shrink-0"><i class="fa-brands fa-android text-lg"></i></div>
+        <div class="min-w-0">
+          <div class="font-bold truncate">${d.name}</div>
+          <div class="text-[11px] font-mono text-white/40 truncate">API ${d.api} · ${d.profile || "pixel_6"} · ${(d.ram_mb/1024).toFixed(0)}G/${(d.storage_mb/1024).toFixed(0)}G</div>
+        </div>
       </div>
-      <div class="flex gap-2 mt-5">
-        <button id="defBtn" class="glass neon-border px-4 py-3 rounded-xl text-sm font-mono text-neon-green flex-1"><i class="fa-solid fa-bolt"></i> Quick default</button>
-        <button id="createBtn" class="btn-primary px-4 py-3 rounded-xl text-sm flex-1"><i class="fa-solid fa-rocket"></i> CREATE DEVICE</button>
-      </div>
-      <div id="createMsg" class="text-xs font-mono mt-3 h-4"></div>
+      ${statusPill(d)}
+    </div>
+
+    ${!online ? `<div class="mt-3">
+      <div class="flex justify-between text-[10px] font-mono text-white/40 mb-1"><span>${d.phase || "queued"}</span><span>${fmtDur(d.bootElapsed)}</span></div>
+      <div class="h-1.5 rounded-full bg-white/8 overflow-hidden"><div class="prog h-full rounded-full" style="width:${pct}%"></div></div>
+    </div>` : `<div class="mt-3 flex items-center gap-4 text-[11px] font-mono text-white/45">
+      <span><i class="fa-solid fa-clock text-brand-green"></i> up ${fmtDur(d.uptime)}</span>
+    </div>`}
+
+    <div class="flex gap-2 mt-4">
+      <button data-open="${d.name}" ${online ? "" : "disabled"} class="btn ${online ? "btn-primary" : "btn-ghost opacity-50 cursor-not-allowed"} flex-1 px-3 py-2 rounded-lg text-xs"><i class="fa-solid fa-up-right-from-square mr-1"></i>Open screen</button>
+      <button data-logs="${d.name}" class="btn btn-ghost px-3 py-2 rounded-lg text-xs text-white/70"><i class="fa-solid fa-terminal"></i></button>
+      <button data-restart="${d.name}" class="btn btn-ghost px-3 py-2 rounded-lg text-xs text-brand-orange"><i class="fa-solid fa-rotate-right"></i></button>
+      <button data-stop="${d.name}" class="btn btn-ghost px-3 py-2 rounded-lg text-xs text-brand-red"><i class="fa-solid fa-trash"></i></button>
+    </div>
+
+    <div data-logbox="${d.name}" class="hidden mt-3 term rounded-lg p-3 h-40 overflow-y-auto text-[11px]"></div>
+  </div>`;
+}
+function renderGrid() {
+  const el = $("#grid"); if (!el) return;
+  $("#devCount").textContent = devices.length ? `(${devices.length})` : "";
+  if (!devices.length) {
+    el.innerHTML = `<div class="glass rounded-2xl p-10 text-center text-white/40 sm:col-span-2 lg:col-span-3">
+      <i class="fa-solid fa-mobile-screen text-4xl mb-3 text-white/15"></i>
+      <p class="font-mono text-sm">No devices yet.</p>
+      <button onclick="openCreate()" class="btn btn-primary mt-4 px-4 py-2 rounded-lg text-xs"><i class="fa-solid fa-plus mr-1"></i>Create your first device</button>
     </div>`;
-  $("#defBtn").onclick = () => {
-    const r = (n) => Math.random().toString(36).slice(2, 2 + n);
-    $("#c_name").value = "test-" + r(4); $("#c_cores").value = 4; $("#c_ram").value = 4096;
-    $("#c_storage").value = 10240; $("#c_user").value = "user_" + r(4); $("#c_pass").value = r(10);
-  };
-  $("#createBtn").onclick = createDevice;
+    return;
+  }
+  el.innerHTML = devices.map(deviceCard).join("");
+  el.querySelectorAll("[data-open]").forEach(b => b.onclick = () => window.open(`/${b.dataset.open}/`, "_blank"));
+  el.querySelectorAll("[data-logs]").forEach(b => b.onclick = () => toggleLogs(b.dataset.logs));
+  el.querySelectorAll("[data-restart]").forEach(b => b.onclick = () => restartDevice(b.dataset.restart));
+  el.querySelectorAll("[data-stop]").forEach(b => b.onclick = () => stopDevice(b.dataset.stop));
+  // keep open log box visible after re-render
+  if (openLogs) { const box = $(`[data-logbox="${openLogs}"]`); if (box) { box.classList.remove("hidden"); renderLogs(openLogs); } }
 }
 
-async function createDevice() {
-  const body = {
-    name: $("#c_name").value.trim(), profile: $("#c_profile").value, api: $("#c_api").value,
-    cores: $("#c_cores").value, ram: $("#c_ram").value, storage: $("#c_storage").value,
-    user: $("#c_user").value.trim(), pass: $("#c_pass").value,
-  };
-  const msg = $("#createMsg");
-  if (!body.name || !body.user || !body.pass) { msg.className = "text-xs font-mono mt-3 text-neon-orange"; msg.textContent = "name, user and pass required"; return; }
-  const btn = $("#createBtn"); btn.disabled = true; btn.classList.add("opacity-60");
+// ---------- live logs ----------
+function toggleLogs(name) {
+  const box = $(`[data-logbox="${name}"]`);
+  if (!box) return;
+  if (openLogs === name && !box.classList.contains("hidden")) { box.classList.add("hidden"); openLogs = null; return; }
+  document.querySelectorAll("[data-logbox]").forEach(b => b.classList.add("hidden"));
+  box.classList.remove("hidden"); openLogs = name; renderLogs(name);
+}
+async function renderLogs(name) {
+  const box = $(`[data-logbox="${name}"]`); if (!box) return;
   try {
-    await api("/api/devices", { method: "POST", body: JSON.stringify(body) });
-    msg.className = "text-xs font-mono mt-3 text-neon-green";
-    msg.textContent = `Created. Access at /${body.name} (booting…)`;
-    setTimeout(render, 800);
-  } catch (e) {
-    msg.className = "text-xs font-mono mt-3 text-neon-orange"; msg.textContent = e.message;
-  } finally { btn.disabled = false; btn.classList.remove("opacity-60"); }
+    const { logs } = await api(`/api/devices/${name}/logs`);
+    const col = { info: "#00d4ff", success: "#3ddc84", warn: "#ff9500", error: "#ff3b5c", cmd: "#8b5cf6" };
+    box.innerHTML = (logs || []).map(l =>
+      `<div><span class="text-white/25">${new Date(l.t).toLocaleTimeString()}</span> <span style="color:${col[l.k] || "#cbd5e1"}">${l.m}</span></div>`
+    ).join("") || `<div class="text-white/25">no logs yet…</div>`;
+    box.scrollTop = box.scrollHeight;
+  } catch (e) { box.innerHTML = `<div class="text-brand-red">log error: ${e.message}</div>`; }
 }
 
-async function delDevice(name) {
-  if (!confirm(`Delete device '${name}'?`)) return;
-  try { await api("/api/devices/" + encodeURIComponent(name), { method: "DELETE" }); render(); } catch (e) { alert(e.message); }
+// ---------- actions ----------
+async function restartDevice(name) {
+  try { await api(`/api/devices/${name}/restart`, { method: "POST" }); toast(`Restarting ${name}…`, "warn"); poll(true); }
+  catch (e) { toast(e.message, "error"); }
+}
+async function stopDevice(name) {
+  if (!confirm(`Stop & remove device "${name}"?`)) return;
+  try { await api(`/api/devices/${name}`, { method: "DELETE" }); toast(`Removed ${name}`, "success"); poll(true); }
+  catch (e) { toast(e.message, "error"); }
 }
 
-render();
-setInterval(async () => { try { devices = (await api("/api/devices")).devices || []; if ($("#tDev")?.classList.contains("tab-active")) showDevices(); } catch {} }, 12000);
+// ---------- create modal ----------
+function openCreate() {
+  const dlg = document.createElement("dialog");
+  dlg.className = "glass rounded-2xl p-0 w-[92vw] max-w-lg text-white";
+  const rnd = Math.random().toString(36).slice(2, 8);
+  dlg.innerHTML = `
+    <form method="dialog">
+      <div class="p-5 border-b border-white/10 flex items-center justify-between">
+        <h3 class="font-bold text-lg"><i class="fa-solid fa-plus text-brand-green mr-2"></i>New Android device</h3>
+        <button value="cancel" class="text-white/40 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="p-5 grid sm:grid-cols-2 gap-4">
+        ${inp("c_name", "Device name (URL: /name)", "text", "phone-" + rnd)}
+        ${sel("c_profile", "Hardware profile", ["pixel_6", "pixel_4", "pixel_xl", "Nexus 6", "Nexus 10"])}
+        ${sel("c_api", "Android version", ["30 (11)", "31 (12)", "33 (13)", "34 (14)"], "34 (14)")}
+        ${inp("c_cores", "CPU cores", "number", "4")}
+        ${inp("c_ram", "RAM (MB)", "number", "4096")}
+        ${inp("c_storage", "Storage (MB)", "number", "10240")}
+        ${inp("c_user", "Device access user", "text", "user")}
+        ${inp("c_pass", "Device access pass", "text", rnd + "x")}
+      </div>
+      <div class="px-5 pb-2 flex gap-2">
+        <button type="button" id="c_quick" class="btn btn-ghost flex-1 py-2 rounded-lg text-xs text-brand-green"><i class="fa-solid fa-bolt mr-1"></i>Quick default (4GB/10GB)</button>
+      </div>
+      <div class="p-5 flex gap-2 border-t border-white/10 mt-2">
+        <button value="cancel" class="btn btn-ghost flex-1 py-2.5 rounded-lg text-sm">Cancel</button>
+        <button type="button" id="c_deploy" class="btn btn-primary flex-1 py-2.5 rounded-lg text-sm"><i class="fa-solid fa-rocket mr-1"></i>Deploy</button>
+      </div>
+    </form>`;
+  document.body.appendChild(dlg);
+  dlg.showModal();
+  dlg.addEventListener("close", () => dlg.remove());
+  dlg.querySelector("#c_quick").onclick = () => {
+    dlg.querySelector("#c_cores").value = 4; dlg.querySelector("#c_ram").value = 4096;
+    dlg.querySelector("#c_storage").value = 10240;
+  };
+  dlg.querySelector("#c_deploy").onclick = async () => {
+    const g = (id) => dlg.querySelector("#" + id).value.trim();
+    const body = {
+      name: g("c_name"), profile: g("c_profile").replace(/\s*\(.*\)/, ""),
+      api: (g("c_api").match(/^\d+/) || ["34"])[0], cores: +g("c_cores"), ram_mb: +g("c_ram"),
+      storage_mb: +g("c_storage"), auth_user: g("c_user"), auth_pass: g("c_pass"),
+    };
+    if (!body.name || !body.auth_user || !body.auth_pass) return toast("Name, user & pass required", "error");
+    try {
+      await api("/api/devices", { method: "POST", body: JSON.stringify(body) });
+      toast(`Deploying ${body.name} — access ${body.auth_user}/${body.auth_pass}`, "success");
+      dlg.close(); poll(true);
+    } catch (e) { toast(e.message, "error"); }
+  };
+}
+function inp(id, label, type, val) {
+  return `<label class="block"><span class="text-[11px] font-mono text-white/55">${label}</span>
+    <input id="${id}" type="${type}" value="${val || ""}" class="fld w-full mt-1 rounded-lg px-3 py-2 text-sm font-mono" autocapitalize="off" autocomplete="off" spellcheck="false"/></label>`;
+}
+function sel(id, label, opts, def) {
+  return `<label class="block"><span class="text-[11px] font-mono text-white/55">${label}</span>
+    <select id="${id}" class="fld w-full mt-1 rounded-lg px-3 py-2 text-sm font-mono">${opts.map(o => `<option ${o === def ? "selected" : ""}>${o}</option>`).join("")}</select></label>`;
+}
+
+// ---------- polling ----------
+async function poll(verbose) {
+  try {
+    const [sp, dv] = await Promise.all([
+      specs ? Promise.resolve({ specs }) : api("/api/specs").then(s => ({ specs: s })),
+      api("/api/devices"),
+    ]);
+    if (sp.specs) specs = sp.specs;
+    devices = dv.devices || [];
+    renderSpecs(); renderGrid(); updateSession();
+    if (openLogs) renderLogs(openLogs);
+    if (verbose) toast("Refreshed", "info");
+  } catch (e) { if (verbose) toast(e.message, "error"); }
+}
+function updateSession() {
+  const left = SESSION_MAX - (Date.now() - sessionStart);
+  const el = $("#sessionLine");
+  if (el) el.innerHTML = left > 0
+    ? `<i class="fa-solid fa-circle text-brand-green text-[7px] mr-1 animate-pulseDot"></i>live · ~${fmtDur(left)} of runner time left`
+    : `<span class="text-brand-orange">session expiring — redeploy soon</span>`;
+}
+
+// ---------- boot ----------
+shell();
+poll(true);
+pollTimer = setInterval(() => poll(false), 5000);
+setInterval(updateSession, 1000);
+window.openCreate = openCreate;

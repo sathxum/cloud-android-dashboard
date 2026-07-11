@@ -1,0 +1,175 @@
+{
+  "devices": {
+    "t1": {
+      "name": "t1",
+      "user": "user",
+      "pass": "42e90e6e178d",
+      "ram": 4096,
+      "storage": 10240,
+      "cores": 4,
+      "api": 34,
+      "profile": "pixel_6",
+      "status": "offline",
+      "port": 9100,
+      "logs": [
+        {
+          "t": 1783753556666,
+          "kind": "info",
+          "msg": "Booting t1 (API 34, pixel_6, 4096MB RAM / 10240MB / 4 cores)..."
+        },
+        {
+          "t": 1783753556682,
+          "kind": "log",
+          "msg": "[boot] t1 api=34 profile=pixel_6 ram=4096M storage=10240M cores=4 port=9100"
+        },
+        {
+          "t": 1783753556694,
+          "kind": "log",
+          "msg": "[boot] host arch=x86_64 -> ABI=x86_64"
+        },
+        {
+          "t": 1783753556694,
+          "kind": "log",
+          "msg": "PHASE downloading image"
+        },
+        {
+          "t": 1783753556706,
+          "kind": "log",
+          "msg": "PHASE creating AVD"
+        },
+        {
+          "t": 1783753556713,
+          "kind": "log",
+          "msg": "PHASE booting emulator"
+        },
+        {
+          "t": 1783753556722,
+          "kind": "warn",
+          "msg": ".github/scripts/boot-device.sh: line 39: adb: command not found"
+        },
+        {
+          "t": 1783753556725,
+          "kind": "error",
+          "msg": "boot process exited (code 127)"
+        }
+      ],
+      "bootStartedAt": 1783753556666,
+      "pid": 1216,
+      "phase": "booting emulator"
+    },
+    "pixel-1": {
+      "name": "pixel-1",
+      "user": "u",
+      "pass": "pw123456",
+      "ram": 6144,
+      "storage": 16384,
+      "cores": 6,
+      "api": 34,
+      "profile": "pixel_6",
+      "status": "offline",
+      "port": 9100,
+      "logs": [
+        {
+          "t": 1783753608454,
+          "kind": "info",
+          "msg": "Booting pixel-1 (API 34, pixel_6, 6144MB RAM / 16384MB / 6 cores)..."
+        },
+        {
+          "t": 1783753608475,
+          "kind": "log",
+          "msg": "[boot] pixel-1 api=34 profile=pixel_6 ram=6144M storage=16384M cores=6 port=9100"
+        },
+        {
+          "t": 1783753608480,
+          "kind": "log",
+          "msg": "[boot] host arch=x86_64 -> ABI=x86_64"
+        },
+        {
+          "t": 1783753608480,
+          "kind": "log",
+          "msg": "PHASE downloading image"
+        },
+        {
+          "t": 1783753608489,
+          "kind": "log",
+          "msg": "PHASE creating AVD"
+        },
+        {
+          "t": 1783753608497,
+          "kind": "log",
+          "msg": "PHASE booting emulator"
+        },
+        {
+          "t": 1783753608503,
+          "kind": "warn",
+          "msg": ".github/scripts/boot-device.sh: line 39: adb: command not found"
+        },
+        {
+          "t": 1783753608506,
+          "kind": "error",
+          "msg": "boot process exited (code 127)"
+        }
+      ],
+      "bootStartedAt": 1783753608453,
+      "pid": 1333,
+      "phase": "booting emulator"
+    },
+    "tablet-1": {
+      "name": "tablet-1",
+      "user": "u",
+      "pass": "pw999999",
+      "ram": 8192,
+      "storage": 20480,
+      "cores": 8,
+      "api": 33,
+      "profile": "pixel_tablet",
+      "status": "offline",
+      "port": 9101,
+      "logs": [
+        {
+          "t": 1783753608510,
+          "kind": "info",
+          "msg": "Booting tablet-1 (API 33, pixel_tablet, 8192MB RAM / 20480MB / 8 cores)..."
+        },
+        {
+          "t": 1783753608524,
+          "kind": "log",
+          "msg": "[boot] tablet-1 api=33 profile=pixel_tablet ram=8192M storage=20480M cores=8 port=9101"
+        },
+        {
+          "t": 1783753608531,
+          "kind": "log",
+          "msg": "[boot] host arch=x86_64 -> ABI=x86_64"
+        },
+        {
+          "t": 1783753608531,
+          "kind": "log",
+          "msg": "PHASE downloading image"
+        },
+        {
+          "t": 1783753608539,
+          "kind": "log",
+          "msg": "PHASE creating AVD"
+        },
+        {
+          "t": 1783753608545,
+          "kind": "log",
+          "msg": "PHASE booting emulator"
+        },
+        {
+          "t": 1783753608550,
+          "kind": "warn",
+          "msg": ".github/scripts/boot-device.sh: line 39: adb: command not found"
+        },
+        {
+          "t": 1783753608553,
+          "kind": "error",
+          "msg": "boot process exited (code 127)"
+        }
+      ],
+      "bootStartedAt": 1783753608510,
+      "pid": 1342,
+      "phase": "booting emulator"
+    }
+  }
+}

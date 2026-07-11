@@ -57,6 +57,9 @@ function allocPort() { return nextPort++; }
 function startDevice(d) {
   d.status = "booting";
   d.port = d.port || allocPort();
+  d.logs = d.logs || [];
+  d.bootStartedAt = Date.now();
+  pushLog(d, "info", `Booting ${d.name} (API ${d.api}, ${d.profile}, ${d.ram}MB RAM / ${d.storage}MB / ${d.cores} cores)...`);
   saveState();
   // boot.sh brings up emulator + ws-scrcpy on d.port; see scripts/boot-device.sh
   const child = spawn("bash", [".github/scripts/boot-device.sh"], {
@@ -73,11 +76,27 @@ function startDevice(d) {
   child.stdout.on("data", (b) => {
     const s = b.toString();
     process.stdout.write(`[${d.name}] ${s}`);
-    if (s.includes("WS_SCRCPY_READY")) { d.status = "online"; saveState(); }
+    s.split(/\r?\n/).forEach((line) => { if (line.trim()) pushLog(d, "log", line.trim()); });
+    if (s.includes("WS_SCRCPY_READY")) { d.status = "online"; d.onlineAt = Date.now(); pushLog(d, "success", "Device online — screen ready."); saveState(); }
+    // explicit phase markers from boot-device.sh take priority
+    const pm = s.match(/PHASE\s+(.+)/);
+    if (pm) d.phase = pm[1].trim();
+    else if (/Downloading|sdkmanager/i.test(s)) d.phase = "downloading image";
+    else if (/create avd/i.test(s)) d.phase = "creating AVD";
+    else if (/wait-for-device|booting/i.test(s)) d.phase = "booting emulator";
+    else if (/ws-scrcpy|scrcpy/i.test(s)) d.phase = "starting screen mirror";
   });
-  child.stderr.on("data", (b) => process.stderr.write(`[${d.name}] ${b}`));
-  child.on("exit", () => { d.status = "offline"; saveState(); });
+  child.stderr.on("data", (b) => {
+    process.stderr.write(`[${d.name}] ${b}`);
+    b.toString().split(/\r?\n/).forEach((line) => { if (line.trim()) pushLog(d, "warn", line.trim()); });
+  });
+  child.on("exit", (code) => { if (d.status !== "online") pushLog(d, "error", `boot process exited (code ${code})`); d.status = d.status === "online" ? "online" : "offline"; saveState(); });
   saveState();
+}
+function pushLog(d, kind, msg) {
+  d.logs = d.logs || [];
+  d.logs.push({ t: Date.now(), kind, msg });
+  if (d.logs.length > 400) d.logs.splice(0, d.logs.length - 400);
 }
 function stopDevice(d) {
   if (d.pid) { try { process.kill(-d.pid, "SIGKILL"); } catch {} }
@@ -159,10 +178,10 @@ function handleApi(req, res) {
       if (devices[name]) return json(res, 409, { error: "device exists" });
       const d = {
         name,
-        user: b.user || "user",
-        pass: b.pass || crypto.randomBytes(6).toString("hex"),
-        ram: parseInt(b.ram || 4096, 10),
-        storage: parseInt(b.storage || 10240, 10),
+        user: b.user || b.auth_user || "user",
+        pass: b.pass || b.auth_pass || crypto.randomBytes(6).toString("hex"),
+        ram: parseInt(b.ram || b.ram_mb || 4096, 10),
+        storage: parseInt(b.storage || b.storage_mb || 10240, 10),
         cores: parseInt(b.cores || 4, 10),
         api: parseInt(b.api || 31, 10),
         profile: b.profile || "pixel_6",
@@ -182,9 +201,37 @@ function handleApi(req, res) {
     saveState();
     return json(res, 200, { ok: true });
   }
+  // GET /api/devices/:name/logs?since=<ts>  -> live logs
+  const mLogs = path.match(/^\/api\/devices\/([^/]+)\/logs$/);
+  if (req.method === "GET" && mLogs) {
+    const d = devices[decodeURIComponent(mLogs[1])];
+    if (!d) return json(res, 404, { error: "not found" });
+    const since = parseInt((req.url.split("since=")[1] || "0"), 10) || 0;
+    const logs = (d.logs || []).filter((l) => l.t > since);
+    return json(res, 200, { status: d.status, phase: d.phase || null, logs });
+  }
+  // POST /api/devices/:name/restart -> reboot the emulator
+  const mRestart = path.match(/^\/api\/devices\/([^/]+)\/restart$/);
+  if (req.method === "POST" && mRestart) {
+    const d = devices[decodeURIComponent(mRestart[1])];
+    if (!d) return json(res, 404, { error: "not found" });
+    stopDevice(d);
+    d.logs = []; d.phase = null;
+    startDevice(d);
+    return json(res, 200, { device: pub(d) });
+  }
   return json(res, 404, { error: "unknown endpoint" });
 }
-function pub(d) { return { name: d.name, user: d.user, pass: d.pass, ram: d.ram, storage: d.storage, cores: d.cores, api: d.api, profile: d.profile, status: d.status }; }
+function pub(d) {
+  return {
+    name: d.name, user: d.user, pass: d.pass, ram: d.ram, storage: d.storage,
+    ram_mb: d.ram, storage_mb: d.storage,
+    cores: d.cores, api: d.api, profile: d.profile, status: d.status,
+    phase: d.phase || null,
+    uptime: d.onlineAt ? Date.now() - d.onlineAt : 0,
+    bootElapsed: d.bootStartedAt ? Date.now() - d.bootStartedAt : 0,
+  };
+}
 
 function hostSpecs() {
   const specs = { os: process.platform, cores: require("os").cpus().length, ram_mb: Math.round(require("os").totalmem() / 1048576) };

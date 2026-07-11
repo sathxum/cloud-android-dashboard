@@ -1,0 +1,82 @@
+name: Cloud Android Gateway
+
+on:
+  workflow_dispatch:
+    inputs:
+      admin_user:
+        description: "Dashboard admin username"
+        required: true
+      admin_pass:
+        description: "Dashboard admin password"
+        required: true
+      tunnel:
+        description: "Dashboard tunnel: cloudflare | ngrok"
+        required: true
+        default: "cloudflare"
+      ngrok_token:
+        description: "Ngrok auth token (if tunnel=ngrok)"
+        required: false
+        default: ""
+
+concurrency:
+  group: cloud-android-gateway
+  cancel-in-progress: true
+
+jobs:
+  gateway:
+    runs-on: macos-13
+    timeout-minutes: 350
+    env:
+      ADMIN_USER: ${{ github.event.inputs.admin_user }}
+      ADMIN_PASS: ${{ github.event.inputs.admin_pass }}
+      TUNNEL: ${{ github.event.inputs.tunnel }}
+      NGROK_TOKEN: ${{ github.event.inputs.ngrok_token }}
+      PORT: "8080"
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install ws-scrcpy + tunnel
+        run: |
+          brew install scrcpy || true
+          npm i -g ws-scrcpy@0.8.5 || npm i -g ws-scrcpy || true
+          if [ "$TUNNEL" = "ngrok" ]; then
+            brew install ngrok/ngrok/ngrok || brew install ngrok || true
+            [ -n "$NGROK_TOKEN" ] && ngrok config add-authtoken "$NGROK_TOKEN" || true
+          else
+            brew install cloudflared || true
+          fi
+
+      - name: Start gateway server
+        run: |
+          chmod +x .github/scripts/boot-device.sh
+          nohup node server.js > gateway.log 2>&1 &
+          sleep 4
+          echo "[gateway] started on :$PORT"
+
+      - name: Open tunnel for the dashboard
+        run: |
+          if [ "$TUNNEL" = "ngrok" ]; then
+            nohup ngrok http 8080 --log=stdout > ngrok.log 2>&1 &
+            sleep 8
+            URL=$(curl -s http://localhost:4040/api/tunnels | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{console.log(JSON.parse(d).tunnels[0].public_url)}catch(e){console.log('')}})")
+          else
+            nohup cloudflared tunnel --url http://localhost:8080 --no-autoupdate > cf.log 2>&1 &
+            sleep 12
+            URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' cf.log | head -1)
+          fi
+          echo "=================================================="
+          echo "  DASHBOARD URL : $URL"
+          echo "  ADMIN USER    : $ADMIN_USER"
+          echo "  Devices open at: $URL/<devicename>"
+          echo "=================================================="
+          echo "DASHBOARD_URL=$URL" >> "$GITHUB_ENV"
+
+      - name: Keep alive
+        run: |
+          echo "Dashboard live at: $DASHBOARD_URL"
+          for i in $(seq 1 340); do sleep 60; done

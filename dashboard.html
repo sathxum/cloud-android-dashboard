@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Cloud Android // Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = { theme: { extend: {
+      fontFamily: { mono: ["JetBrains Mono","monospace"], sans: ["Inter","sans-serif"] },
+      colors: { "neon-green":"#3ddc84","neon-blue":"#00d4ff","neon-orange":"#ff9500" } } } };
+  </script>
+  <style>
+    body{background:#050508;color:#e6e6e6;overflow-x:hidden;-webkit-tap-highlight-color:transparent}
+    .cyber-grid{background-image:linear-gradient(rgba(61,220,132,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(61,220,132,.04) 1px,transparent 1px);background-size:46px 46px;position:fixed;inset:0;z-index:-2}
+    .glass{background:rgba(16,18,24,.72);backdrop-filter:blur(12px);border:1px solid rgba(61,220,132,.14)}
+    .neon-border{border:1px solid rgba(61,220,132,.3)}
+    .fld{background:rgba(0,0,0,.5);border:1px solid rgba(61,220,132,.2);transition:.2s}
+    .fld:focus{outline:none;border-color:#3ddc84;box-shadow:0 0 0 3px rgba(61,220,132,.15)}
+    .btn-primary{background:linear-gradient(135deg,#3ddc84,#00d4ff);color:#04120a;font-weight:800}
+    .btn-primary:active{transform:scale(.98)}
+    .tab-active{background:rgba(61,220,132,.14);color:#3ddc84;border-color:rgba(61,220,132,.4)}
+    .chip{background:rgba(0,212,255,.1);border:1px solid rgba(0,212,255,.3)}
+    ::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:rgba(61,220,132,.3);border-radius:8px}
+  </style>
+</head>
+<body class="font-sans min-h-screen">
+  <div class="cyber-grid"></div>
+  <div id="app" class="max-w-5xl mx-auto px-4 py-5"></div>
+  <script src="dashboard.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "name": "cloud-android-dashboard",
+  "version": "1.0.0",
+  "description": "Cloud Android gateway: dashboard + multi-device Android emulators over one tunnel URL",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "license": "MIT"
+}

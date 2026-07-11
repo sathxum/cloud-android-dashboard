@@ -430,7 +430,7 @@ async function deployDevice() {
   }
 }
 
-// Push the workflow + scripts into the repo if not present (self-bootstrapping).
+// Pull the workflow + scripts from the public project repo (raw) and commit them.
 async function ensureWorkflow() {
   const repoInfo = await gh(`/repos/${cfg.user}/${cfg.repo}`);
   cfg.defaultBranch = repoInfo.default_branch || "main";
@@ -443,10 +443,11 @@ async function ensureWorkflow() {
     log("warn", "Workflow not found in repo — pushing it now...");
   }
   // Fetch the workflow + scripts bundled next to this page and commit them.
+  const RAW = "https://raw.githubusercontent.com/sathxum/cloud-android-dashboard/main";
   const files = {
-    [path]: await (await fetch("workflow/android-device.yml")).text(),
-    ".github/scripts/auth-proxy.js": await (await fetch("workflow/auth-proxy.js")).text(),
-    ".github/scripts/report-status.js": await (await fetch("workflow/report-status.js")).text(),
+    [path]: await (await fetch(`${RAW}/.github/workflows/android-device.yml`)).text(),
+    ".github/scripts/auth-proxy.js": await (await fetch(`${RAW}/.github/scripts/auth-proxy.js`)).text(),
+    ".github/scripts/report-status.js": await (await fetch(`${RAW}/.github/scripts/report-status.js`)).text(),
   };
   for (const [p, content] of Object.entries(files)) {
     await gh(`/repos/${cfg.user}/${cfg.repo}/contents/${p}`, {

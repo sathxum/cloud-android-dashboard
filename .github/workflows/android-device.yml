@@ -1,0 +1,175 @@
+name: Android Cloud Device
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_name:
+        description: "Device name (used in URL)"
+        required: true
+        default: "pixel"
+      android_api:
+        description: "Android API level"
+        required: true
+        default: "31"
+      device_profile:
+        description: "AVD hardware profile"
+        required: true
+        default: "pixel_6"
+      ram_mb:
+        description: "RAM in MB"
+        required: true
+        default: "4096"
+      storage_mb:
+        description: "Internal storage in MB"
+        required: true
+        default: "10240"
+      cores:
+        description: "CPU cores"
+        required: true
+        default: "4"
+      auth_user:
+        description: "Device access username"
+        required: true
+      auth_pass:
+        description: "Device access password"
+        required: true
+      tunnel:
+        description: "Tunnel provider: cloudflare | ngrok"
+        required: true
+        default: "cloudflare"
+      ngrok_token:
+        description: "Ngrok auth token (only if tunnel=ngrok)"
+        required: false
+        default: ""
+      status_gist_id:
+        description: "Gist ID to report device URL/status into"
+        required: false
+        default: ""
+
+concurrency:
+  group: android-${{ github.event.inputs.device_name }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: macos-13
+    timeout-minutes: 350
+    env:
+      DEVICE_NAME: ${{ github.event.inputs.device_name }}
+      ANDROID_API: ${{ github.event.inputs.android_api }}
+      DEVICE_PROFILE: ${{ github.event.inputs.device_profile }}
+      RAM_MB: ${{ github.event.inputs.ram_mb }}
+      STORAGE_MB: ${{ github.event.inputs.storage_mb }}
+      CORES: ${{ github.event.inputs.cores }}
+      AUTH_USER: ${{ github.event.inputs.auth_user }}
+      AUTH_PASS: ${{ github.event.inputs.auth_pass }}
+      TUNNEL: ${{ github.event.inputs.tunnel }}
+      NGROK_TOKEN: ${{ github.event.inputs.ngrok_token }}
+      STATUS_GIST_ID: ${{ github.event.inputs.status_gist_id }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Report specs (real, exact)
+        id: specs
+        run: |
+          echo "== Host specs ==" 
+          TOTAL_RAM_MB=$(( $(sysctl -n hw.memsize) / 1024 / 1024 ))
+          HOST_CORES=$(sysctl -n hw.ncpu)
+          DISK_FREE=$(df -m / | awk 'NR==2{print $4}')
+          echo "host_ram_mb=$TOTAL_RAM_MB"   >> "$GITHUB_OUTPUT"
+          echo "host_cores=$HOST_CORES"        >> "$GITHUB_OUTPUT"
+          echo "host_disk_free_mb=$DISK_FREE"  >> "$GITHUB_OUTPUT"
+          echo "Host RAM: ${TOTAL_RAM_MB} MB | Host cores: ${HOST_CORES} | Disk free: ${DISK_FREE} MB"
+
+      - name: Install scrcpy + ws-scrcpy deps
+        run: |
+          brew install scrcpy || true
+          npm i -g ws-scrcpy@0.8.5 || npm i -g ws-scrcpy || true
+
+      - name: Install tunnel (cloudflared / ngrok)
+        run: |
+          if [ "$TUNNEL" = "ngrok" ]; then
+            brew install ngrok/ngrok/ngrok || brew install ngrok || true
+            if [ -n "$NGROK_TOKEN" ]; then ngrok config add-authtoken "$NGROK_TOKEN"; fi
+          else
+            brew install cloudflared || true
+          fi
+
+      - name: Create and boot AVD
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ github.event.inputs.android_api }}
+          arch: x86_64
+          profile: ${{ github.event.inputs.device_profile }}
+          cores: ${{ github.event.inputs.cores }}
+          ram-size: ${{ github.event.inputs.ram_mb }}M
+          disk-size: ${{ github.event.inputs.storage_mb }}M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            set -e
+            echo "[INFO] Emulator booted. Verifying device specs..."
+            adb wait-for-device
+            adb shell getprop ro.product.model || true
+            REAL_RAM_KB=$(adb shell cat /proc/meminfo | awk '/MemTotal/{print $2}')
+            REAL_RAM_MB=$(( REAL_RAM_KB / 1024 ))
+            REAL_CORES=$(adb shell cat /proc/cpuinfo | grep -c ^processor)
+            REAL_STORAGE=$(adb shell df /data | awk 'NR==2{print $2}')
+            echo "[DEVICE] RAM: ${REAL_RAM_MB} MB | cores: ${REAL_CORES} | /data blocks: ${REAL_STORAGE}"
+
+            echo "[INFO] Starting ws-scrcpy on :8000 ..."
+            nohup ws-scrcpy > ws-scrcpy.log 2>&1 &
+            sleep 8
+
+            echo "[INFO] Starting auth proxy on :8080 ..."
+            node .github/scripts/auth-proxy.js > auth-proxy.log 2>&1 &
+            sleep 3
+
+            echo "[INFO] Starting tunnel ($TUNNEL) ..."
+            if [ "$TUNNEL" = "ngrok" ]; then
+              nohup ngrok http 8080 --log=stdout > ngrok.log 2>&1 &
+              sleep 8
+              PUBLIC_URL=$(curl -s http://localhost:4040/api/tunnels | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{console.log(JSON.parse(d).tunnels[0].public_url)}catch(e){console.log('')}})")
+            else
+              nohup cloudflared tunnel --url http://localhost:8080 --no-autoupdate > cf.log 2>&1 &
+              sleep 12
+              PUBLIC_URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' cf.log | head -1)
+            fi
+            echo "[SUCCESS] Public URL: $PUBLIC_URL"
+            echo "PUBLIC_URL=$PUBLIC_URL" >> "$GITHUB_ENV"
+
+            # Report status back to gist so the dashboard can read it
+            if [ -n "$STATUS_GIST_ID" ] && [ -n "$PUBLIC_URL" ]; then
+              node .github/scripts/report-status.js "$STATUS_GIST_ID" "$DEVICE_NAME" "$PUBLIC_URL" "online" || true
+            fi
+
+            echo "[INFO] Device '$DEVICE_NAME' is live at $PUBLIC_URL"
+            echo "[INFO] Access user: $AUTH_USER (password hidden)"
+            echo "[INFO] Keeping device alive (up to job timeout)..."
+            # Keep alive until job timeout; refresh status periodically
+            for i in $(seq 1 340); do
+              sleep 60
+              if [ -n "$STATUS_GIST_ID" ] && [ -n "$PUBLIC_URL" ]; then
+                node .github/scripts/report-status.js "$STATUS_GIST_ID" "$DEVICE_NAME" "$PUBLIC_URL" "online" || true
+              fi
+            done
+
+      - name: Mark offline
+        if: always()
+        run: |
+          if [ -n "$STATUS_GIST_ID" ]; then
+            node .github/scripts/report-status.js "$STATUS_GIST_ID" "$DEVICE_NAME" "" "offline" || true
+          fi

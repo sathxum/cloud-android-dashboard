@@ -110,7 +110,11 @@ function proxyHttp(req, res, targetPort, stripPrefix) {
     { host: "127.0.0.1", port: targetPort, method: req.method, path, headers: req.headers },
     (pres) => { res.writeHead(pres.statusCode || 502, pres.headers); pres.pipe(res); }
   );
-  pr.on("error", () => { res.writeHead(502); res.end("device not ready"); });
+  pr.on("error", () => {
+    // device screen server not up yet -> show a friendly waiting page instead of 502
+    res.writeHead(503, { "Content-Type": "text/html" });
+    res.end(`<meta http-equiv=refresh content=4><meta name=viewport content="width=device-width,initial-scale=1"><body style="background:#050508;color:#3ddc84;font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h2>📱 Connecting…</h2><p style="color:#9aa">Screen mirror is starting. This page will retry automatically.</p></div></body>`);
+  });
   req.pipe(pr);
 }
 

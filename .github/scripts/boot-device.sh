@@ -23,8 +23,13 @@ ARCH="$(uname -m)"
 if [ "$ARCH" = "arm64" ]; then ABI="arm64-v8a"; else ABI="x86_64"; fi
 PKG="system-images;android-${API};google_apis;${ABI}"
 echo "[boot] host arch=$ARCH -> ABI=$ABI"
+# create AVD (idempotent). skip download if the image is already present (pre-warmed).
 echo "PHASE downloading image"
-yes | sdkmanager "$PKG" "platform-tools" "emulator" >/dev/null 2>&1 || true
+if [ ! -d "$SDK/system-images/android-${API}/google_apis/${ABI}" ]; then
+  yes | sdkmanager "$PKG" "platform-tools" "emulator" >/dev/null 2>&1 || true
+else
+  echo "[boot] image already present — skipping download"
+fi
 
 # create AVD (idempotent)
 echo "PHASE creating AVD"

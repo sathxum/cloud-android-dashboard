@@ -53,6 +53,20 @@ jobs:
           fi
           node --version; which cloudflared || true; which ngrok || true
 
+      - name: Pre-warm Android SDK + emulator image (so first device is fast)
+        run: |
+          set -x
+          # macOS runners ship the Android SDK; make sure emulator + a default image are ready
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SDK="$ANDROID_SDK_ROOT"
+          export PATH="$SDK/cmdline-tools/latest/bin:$SDK/platform-tools:$SDK/emulator:$PATH"
+          ARCH="$(uname -m)"
+          if [ "$ARCH" = "arm64" ]; then ABI="arm64-v8a"; else ABI="x86_64"; fi
+          # default = API 34 (Android 14). Pre-download in the background is fine, but do it now to speed first boot.
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          yes | sdkmanager "platform-tools" "emulator" "system-images;android-34;google_apis;${ABI}" >/dev/null 2>&1 || true
+          echo "[prewarm] SDK + system-images;android-34;google_apis;${ABI} ready"
+
       - name: Boot gateway + tunnel (robust)
         run: |
           set -e

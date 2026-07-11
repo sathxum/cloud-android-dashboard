@@ -220,6 +220,28 @@ function handleApi(req, res) {
     startDevice(d);
     return json(res, 200, { device: pub(d) });
   }
+  // POST /api/exec  { cmd, cwd } -> run a shell command on the runner (admin)
+  if (req.method === "POST" && path === "/api/exec") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      let b; try { b = JSON.parse(body || "{}"); } catch { return json(res, 400, { error: "bad json" }); }
+      const cmd = String(b.cmd || "").trim();
+      if (!cmd) return json(res, 400, { error: "cmd required" });
+      const cwd = b.cwd && fs.existsSync(b.cwd) ? b.cwd : process.cwd();
+      const child = spawn("bash", ["-lc", cmd], { cwd, env: process.env });
+      let out = "", errbuf = "", killed = false;
+      const timer = setTimeout(() => { killed = true; try { child.kill("SIGKILL"); } catch {} }, 60000);
+      child.stdout.on("data", (d) => { out += d; if (out.length > 200000) out = out.slice(-200000); });
+      child.stderr.on("data", (d) => { errbuf += d; if (errbuf.length > 200000) errbuf = errbuf.slice(-200000); });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        json(res, 200, { code, out, err: errbuf, cwd, killed });
+      });
+      child.on("error", (e) => { clearTimeout(timer); json(res, 200, { code: -1, out, err: String(e), cwd }); });
+    });
+    return;
+  }
   return json(res, 404, { error: "unknown endpoint" });
 }
 function pub(d) {
@@ -234,8 +256,19 @@ function pub(d) {
 }
 
 function hostSpecs() {
-  const specs = { os: process.platform, cores: require("os").cpus().length, ram_mb: Math.round(require("os").totalmem() / 1048576) };
-  try { specs.disk_free_mb = parseInt(execSync("df -m / | awk 'NR==2{print $4}'").toString().trim(), 10); } catch {}
+  const os = require("os");
+  const specs = { os: process.platform, cores: os.cpus().length, ram_mb: Math.round(os.totalmem() / 1048576) };
+  try {
+    if (process.platform === "darwin") {
+      // real physical RAM on macOS
+      specs.ram_mb = Math.round(parseInt(execSync("sysctl -n hw.memsize").toString().trim(), 10) / 1048576);
+      specs.cores = parseInt(execSync("sysctl -n hw.ncpu").toString().trim(), 10) || specs.cores;
+      specs.model = execSync("sysctl -n hw.model").toString().trim();
+      specs.disk_free_mb = parseInt(execSync("df -m / | awk 'NR==2{print $4}'").toString().trim(), 10);
+    } else {
+      specs.disk_free_mb = parseInt(execSync("df -m / | awk 'NR==2{print $4}'").toString().trim(), 10);
+    }
+  } catch {}
   return specs;
 }
 

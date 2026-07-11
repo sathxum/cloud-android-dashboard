@@ -50,6 +50,7 @@ function shell() {
         </div>
       </div>
       <div class="flex items-center gap-2">
+        <button id="termBtn" class="btn btn-ghost px-4 py-2.5 rounded-xl text-sm text-white/70"><i class="fa-solid fa-terminal mr-2"></i>Terminal</button>
         <button id="newBtn" class="btn btn-primary px-4 py-2.5 rounded-xl text-sm"><i class="fa-solid fa-plus mr-2"></i>New device</button>
         <button id="logoutBtn" class="btn btn-ghost px-3 py-2.5 rounded-xl text-sm text-white/70"><i class="fa-solid fa-power-off"></i></button>
       </div>
@@ -64,6 +65,7 @@ function shell() {
     <section id="grid" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4"></section>`;
 
   $("#newBtn").onclick = openCreate;
+  $("#termBtn").onclick = openTerminal;
   $("#refreshBtn").onclick = () => poll(true);
   $("#logoutBtn").onclick = () => { document.cookie = ""; location.reload(); };
   renderSpecs();
@@ -111,7 +113,7 @@ function deviceCard(d) {
         <div class="w-11 h-11 rounded-xl grid place-items-center ${online ? "bg-brand-green/15 text-brand-green" : "bg-white/5 text-white/40"} shrink-0"><i class="fa-brands fa-android text-lg"></i></div>
         <div class="min-w-0">
           <div class="font-bold truncate">${d.name}</div>
-          <div class="text-[11px] font-mono text-white/40 truncate">API ${d.api} · ${d.profile || "pixel_6"} · ${(d.ram_mb/1024).toFixed(0)}G/${(d.storage_mb/1024).toFixed(0)}G</div>
+          <div class="text-[11px] font-mono text-white/40 truncate">API ${d.api} · ${d.profile || "pixel_6"} · ${d.ram_mb}MB · ${d.storage_mb}MB · ${d.cores}c</div>
         </div>
       </div>
       ${statusPill(d)}
@@ -168,7 +170,7 @@ async function renderLogs(name) {
     const { logs } = await api(`/api/devices/${name}/logs`);
     const col = { info: "#00d4ff", success: "#3ddc84", warn: "#ff9500", error: "#ff3b5c", cmd: "#8b5cf6" };
     box.innerHTML = (logs || []).map(l =>
-      `<div><span class="text-white/25">${new Date(l.t).toLocaleTimeString()}</span> <span style="color:${col[l.k] || "#cbd5e1"}">${l.m}</span></div>`
+      `<div><span class="text-white/25">${new Date(l.t).toLocaleTimeString()}</span> <span style="color:${col[l.kind] || "#cbd5e1"}">${l.msg}</span></div>`
     ).join("") || `<div class="text-white/25">no logs yet…</div>`;
     box.scrollTop = box.scrollHeight;
   } catch (e) { box.innerHTML = `<div class="text-brand-red">log error: ${e.message}</div>`; }
@@ -243,6 +245,57 @@ function inp(id, label, type, val) {
 function sel(id, label, opts, def) {
   return `<label class="block"><span class="text-[11px] font-mono text-white/55">${label}</span>
     <select id="${id}" class="fld w-full mt-1 rounded-lg px-3 py-2 text-sm font-mono">${opts.map(o => `<option ${o === def ? "selected" : ""}>${o}</option>`).join("")}</select></label>`;
+}
+
+// ---------- macOS terminal ----------
+function openTerminal() {
+  const dlg = document.createElement("dialog");
+  dlg.className = "glass rounded-2xl p-0 w-[92vw] max-w-3xl text-white";
+  dlg.innerHTML = `
+    <div class="flex items-center justify-between px-4 py-3 border-b border-white/10">
+      <div class="flex items-center gap-2 text-sm font-semibold"><i class="fa-solid fa-terminal text-brand-green"></i> macOS runner terminal</div>
+      <button value="cancel" class="text-white/40 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div id="tout" class="term rounded-none px-4 py-3 h-[52vh] overflow-y-auto text-xs whitespace-pre-wrap"><div class="text-white/30">Type a command and press Enter. Runs on the GitHub runner. 60s limit per command.</div></div>
+    <div class="flex items-center gap-2 px-3 py-2.5 border-t border-white/10">
+      <span class="text-brand-green font-mono text-xs">$</span>
+      <input id="tin" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="e.g. sw_vers ; adb devices ; ls" class="fld flex-1 rounded-lg px-3 py-2 text-xs font-mono" />
+      <button id="trun" class="btn btn-primary px-3 py-2 rounded-lg text-xs"><i class="fa-solid fa-play"></i></button>
+    </div>`;
+  document.body.appendChild(dlg);
+  dlg.showModal();
+  dlg.addEventListener("close", () => dlg.remove());
+
+  const out = dlg.querySelector("#tout");
+  const inp = dlg.querySelector("#tin");
+  const hist = []; let hi = -1;
+  const write = (html) => { const d = document.createElement("div"); d.innerHTML = html; out.appendChild(d); out.scrollTop = out.scrollHeight; };
+
+  async function run() {
+    const cmd = inp.value.trim();
+    if (!cmd) return;
+    hist.push(cmd); hi = hist.length;
+    write(`<span class="text-brand-blue">$ ${cmd.replace(/</g, "&lt;")}</span>`);
+    inp.value = ""; inp.disabled = true;
+    try {
+      const r = await api("/api/exec", { method: "POST", body: JSON.stringify({ cmd }) });
+      if (r.out) write(`<span class="text-white/80">${r.out.replace(/</g, "&lt;")}</span>`);
+      if (r.err) write(`<span class="text-brand-orange">${r.err.replace(/</g, "&lt;")}</span>`);
+      if (r.killed) write(`<span class="text-brand-red">[timed out after 60s]</span>`);
+      write(`<span class="text-white/25">exit ${r.code} · ${r.cwd}</span>`);
+    } catch (e) {
+      write(`<span class="text-brand-red">error: ${e.message}</span>`);
+    } finally {
+      inp.disabled = false; inp.focus();
+    }
+  }
+  dlg.querySelector("#trun").onclick = run;
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") run();
+    else if (e.key === "ArrowUp") { if (hi > 0) { hi--; inp.value = hist[hi] || ""; } }
+    else if (e.key === "ArrowDown") { if (hi < hist.length - 1) { hi++; inp.value = hist[hi] || ""; } else { hi = hist.length; inp.value = ""; } }
+  });
+  setTimeout(() => inp.focus(), 100);
 }
 
 // ---------- polling ----------

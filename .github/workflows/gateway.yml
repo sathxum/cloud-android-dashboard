@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   gateway:
-    runs-on: macos-13
+    runs-on: macos-15
     timeout-minutes: 350
     env:
       ADMIN_USER: ${{ github.event.inputs.admin_user }}

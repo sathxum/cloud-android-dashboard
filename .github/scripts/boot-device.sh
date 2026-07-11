@@ -18,7 +18,11 @@ export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
 SDK="$ANDROID_SDK_ROOT"
 PATH="$SDK/cmdline-tools/latest/bin:$SDK/platform-tools:$SDK/emulator:$PATH"
 
-PKG="system-images;android-${API};google_apis;x86_64"
+# Apple Silicon (arm64) macOS runners need arm64-v8a images.
+ARCH="$(uname -m)"
+if [ "$ARCH" = "arm64" ]; then ABI="arm64-v8a"; else ABI="x86_64"; fi
+PKG="system-images;android-${API};google_apis;${ABI}"
+echo "[boot] host arch=$ARCH -> ABI=$ABI"
 yes | sdkmanager "$PKG" "platform-tools" "emulator" >/dev/null 2>&1 || true
 
 # create AVD (idempotent)
